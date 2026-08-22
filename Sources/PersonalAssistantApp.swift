@@ -6,7 +6,7 @@ public struct PersonalAssistantApp: App {
     
     public var body: some Scene {
         WindowGroup {
-            MainDashboardView()
+            RootTabView()
                 .preferredColorScheme(.dark)
         }
     }

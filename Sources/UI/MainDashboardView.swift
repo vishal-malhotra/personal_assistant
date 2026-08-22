@@ -3,6 +3,7 @@ import SwiftUI
 public struct MainDashboardView: View {
     @ObservedObject private var speechService = SpeechRecognitionService.shared
     @ObservedObject private var transcriptStore = TranscriptStore.shared
+    @ObservedObject private var modelDownloader = ModelDownloadManager.shared
     
     @State private var isRecordingViewPresented: Bool = false
     @State private var isProcessing: Bool = false
@@ -28,18 +29,93 @@ public struct MainDashboardView: View {
     public var body: some View {
         NavigationStack {
             List {
-                // Section: Privacy Telemetry Note
+                // Section 1: AI Model Engine Status & Downloader
+                Section(header: Text("On-Device AI Engine")) {
+                    if modelDownloader.isDownloaded {
+                        HStack {
+                            Image(systemName: "cpu.fill")
+                                .foregroundColor(AssistantTheme.systemGreen)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Offline Neural LLM Active")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                Text("Llama 3.2 1B (Quantized Q4_K_M)")
+                                    .font(.caption2)
+                                    .foregroundColor(AssistantTheme.secondaryLabel)
+                            }
+                            Spacer()
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(AssistantTheme.systemGreen)
+                        }
+                    } else if modelDownloader.isDownloading {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Downloading Neural Model...")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                                Spacer()
+                                Button("Cancel") {
+                                    modelDownloader.cancelDownload()
+                                }
+                                .font(.caption)
+                                .foregroundColor(AssistantTheme.systemRed)
+                            }
+                            
+                            ProgressView(value: modelDownloader.downloadProgress, total: 1.0)
+                                .tint(AssistantTheme.systemBlue)
+                            
+                            Text(modelDownloader.progressStatusText)
+                                .font(.caption2)
+                                .foregroundColor(AssistantTheme.secondaryLabel)
+                        }
+                        .padding(.vertical, 4)
+                    } else {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Image(systemName: "bolt.shield")
+                                    .foregroundColor(AssistantTheme.systemBlue)
+                                Text("Dynamic Natural Language Active")
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                            }
+                            
+                            Text("Fast on-device parsing active. You can also download the full neural LLM for extended reasoning.")
+                                .font(.caption2)
+                                .foregroundColor(AssistantTheme.secondaryLabel)
+                            
+                            Button(action: {
+                                modelDownloader.startDownload()
+                            }) {
+                                HStack {
+                                    Image(systemName: "arrow.down.circle.fill")
+                                    Text("Download Llama 3.2 Model (750 MB)")
+                                }
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .padding(.vertical, 6)
+                                .padding(.horizontal, 12)
+                                .background(AssistantTheme.systemBlue.opacity(0.15))
+                                .foregroundColor(AssistantTheme.systemBlue)
+                                .clipShape(Capsule())
+                            }
+                            .padding(.top, 4)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+                
+                // Section 2: Privacy Telemetry Note
                 Section {
                     HStack(spacing: 8) {
                         Image(systemName: "lock.shield")
                             .foregroundColor(AssistantTheme.systemGreen)
-                        Text("All audio is processed on-device. Zero data leaves this iPhone.")
+                        Text("All audio & transcripts processed 100% on-device. Zero data leaves this iPhone.")
                             .font(.footnote)
                             .foregroundColor(AssistantTheme.secondaryLabel)
                     }
                 }
                 
-                // Section: Meetings List
+                // Section 3: Meetings List
                 if filteredRecords.isEmpty {
                     Section {
                         VStack(spacing: 12) {
@@ -52,7 +128,7 @@ public struct MainDashboardView: View {
                                 .font(.headline)
                                 .foregroundColor(AssistantTheme.label)
                             
-                            Text("Tap the record button below to start a meeting transcription session.")
+                            Text("Tap the red record button below to start a meeting transcription session.")
                                 .font(.subheadline)
                                 .foregroundColor(AssistantTheme.secondaryLabel)
                                 .multilineTextAlignment(.center)
