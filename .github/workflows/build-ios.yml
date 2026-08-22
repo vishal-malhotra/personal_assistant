@@ -16,9 +16,15 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Select Xcode Version
+      - name: Select Xcode 16
         run: |
-          sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer || sudo xcode-select -s /Applications/Xcode_16.0.app/Contents/Developer || true
+          for app in /Applications/Xcode_16*.app /Applications/Xcode.app; do
+            if [ -d "$app" ]; then
+              echo "Selecting $app"
+              sudo xcode-select -s "$app/Contents/Developer"
+              break
+            fi
+          done
           xcodebuild -version
 
       - name: Install XcodeGen
@@ -34,7 +40,6 @@ jobs:
           xcodebuild -project PersonalAssistant.xcodeproj \
             -scheme PersonalAssistant \
             -configuration Release \
-            -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
@@ -44,8 +49,14 @@ jobs:
 
       - name: Package Payload into IPA
         run: |
+          APP_PATH=$(find ./build -name "PersonalAssistant.app" -type d | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "Error: PersonalAssistant.app not found in build directory"
+            exit 1
+          fi
+          echo "Found app at: $APP_PATH"
           mkdir -p Payload
-          cp -r ./build/Release-iphoneos/PersonalAssistant.app Payload/
+          cp -r "$APP_PATH" Payload/
           zip -r PersonalAssistant.ipa Payload
 
       - name: Upload IPA Artifact
