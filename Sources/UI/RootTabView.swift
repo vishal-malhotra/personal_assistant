@@ -18,6 +18,12 @@ public struct RootTabView: View {
                     Label("Ask AI", systemImage: "bubble.left.and.sparkles.fill")
                 }
                 .tag(1)
+            
+            SettingsConfigView()
+                .tabItem {
+                    Label("Settings", systemImage: "gearshape.fill")
+                }
+                .tag(2)
         }
         .tint(AssistantTheme.systemBlue)
     }

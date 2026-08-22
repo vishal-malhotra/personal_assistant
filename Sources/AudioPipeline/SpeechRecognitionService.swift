@@ -24,7 +24,7 @@ public struct RecognitionLanguage: Identifiable, Hashable {
 }
 
 /// Robust on-device Speech-to-Text service supporting Hinglish, Hindi, and English with audio caching for Whisper refinement.
-/// Seamlessly overcomes the ~60-second iOS SFSpeechRecognizer timeout via automated 45-second rolling cycles.
+/// Preserves the entire accumulated conversation history without dropping early speech chunks.
 public final class SpeechRecognitionService: NSObject, ObservableObject {
     public static let shared = SpeechRecognitionService()
     
@@ -50,7 +50,8 @@ public final class SpeechRecognitionService: NSObject, ObservableObject {
     private let vadFilter = VADFilter(energyThresholdDB: -42.0)
     private let rollingBuffer = RollingAudioBuffer(maxBufferDurationSeconds: 30.0)
     
-    private var segmentTextBuffer: String = ""
+    private var accumulatedSegments: [String] = []
+    private var currentSegmentText: String = ""
     private var cycleTimer: Timer?
     private var durationTimer: Timer?
     private var startTime: Date?
@@ -106,11 +107,11 @@ public final class SpeechRecognitionService: NSObject, ObservableObject {
         
         liveTranscript = ""
         finalizedTranscript = ""
-        segmentTextBuffer = ""
+        currentSegmentText = ""
+        accumulatedSegments.removeAll()
         sessionDuration = 0.0
         startTime = Date()
         
-        // Prepare temporary audio file for Whisper refinement
         let tempAudioURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("session_\(UUID().uuidString).caf")
         self.lastSessionAudioFileURL = tempAudioURL
         
@@ -125,7 +126,9 @@ public final class SpeechRecognitionService: NSObject, ObservableObject {
     }
     
     public func stopRecording() -> String {
-        guard state == .recording || state == .paused else { return finalizedTranscript }
+        guard state == .recording || state == .paused else {
+            return fullCombinedTranscript()
+        }
         
         state = .processing
         
@@ -148,19 +151,30 @@ public final class SpeechRecognitionService: NSObject, ObservableObject {
         AudioSessionManager.shared.deactivateAudioSession()
         rollingBuffer.purgeAllBuffers()
         
-        if !segmentTextBuffer.isEmpty {
-            if finalizedTranscript.isEmpty {
-                finalizedTranscript = segmentTextBuffer
-            } else {
-                finalizedTranscript += " " + segmentTextBuffer
-            }
+        if !currentSegmentText.isEmpty {
+            accumulatedSegments.append(currentSegmentText)
+            currentSegmentText = ""
         }
         
-        let completedTranscript = finalizedTranscript
+        let completed = fullCombinedTranscript()
+        self.finalizedTranscript = completed
+        self.liveTranscript = completed
         audioLevel = 0.0
         state = .idle
         
-        return completedTranscript
+        return completed
+    }
+    
+    private func fullCombinedTranscript() -> String {
+        var allParts = accumulatedSegments
+        if !currentSegmentText.isEmpty && !allParts.contains(currentSegmentText) {
+            allParts.append(currentSegmentText)
+        }
+        let merged = allParts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        if merged.isEmpty && !liveTranscript.isEmpty {
+            return liveTranscript
+        }
+        return merged
     }
     
     public func cleanupLastSessionAudio() {
@@ -176,7 +190,6 @@ public final class SpeechRecognitionService: NSObject, ObservableObject {
         let inputNode = audioEngine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
         
-        // Create audio file writer
         self.sessionAudioFile = try? AVAudioFile(forWriting: outputAudioURL, settings: recordingFormat.settings)
         
         try startRecognitionTask()
@@ -185,16 +198,13 @@ public final class SpeechRecognitionService: NSObject, ObservableObject {
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] (buffer, _) in
             guard let self = self else { return }
             
-            // 1. Write buffer to disk for Whisper pass
             try? self.sessionAudioFile?.write(from: buffer)
             
-            // 2. Audio level visualization
             let level = self.vadFilter.normalizedPowerLevel(for: buffer)
             DispatchQueue.main.async {
                 self.audioLevel = level
             }
             
-            // 3. VAD gating for Speech Recognizer
             if self.vadFilter.isSpeechDetected(in: buffer) {
                 self.recognitionRequest?.append(buffer)
             }
@@ -226,12 +236,9 @@ public final class SpeechRecognitionService: NSObject, ObservableObject {
             if let result = result {
                 let latestSegment = result.bestTranscription.formattedString
                 DispatchQueue.main.async {
-                    self.segmentTextBuffer = latestSegment
-                    if self.finalizedTranscript.isEmpty {
-                        self.liveTranscript = latestSegment
-                    } else {
-                        self.liveTranscript = self.finalizedTranscript + " " + latestSegment
-                    }
+                    self.currentSegmentText = latestSegment
+                    let combined = self.fullCombinedTranscript()
+                    self.liveTranscript = combined
                 }
             }
             
@@ -251,13 +258,9 @@ public final class SpeechRecognitionService: NSObject, ObservableObject {
     private func performRollingCycleTransition() {
         guard state == .recording else { return }
         
-        if !segmentTextBuffer.isEmpty {
-            if finalizedTranscript.isEmpty {
-                finalizedTranscript = segmentTextBuffer
-            } else {
-                finalizedTranscript += " " + segmentTextBuffer
-            }
-            segmentTextBuffer = ""
+        if !currentSegmentText.isEmpty {
+            accumulatedSegments.append(currentSegmentText)
+            currentSegmentText = ""
         }
         
         do {

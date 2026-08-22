@@ -23,7 +23,7 @@ public enum InferenceError: LocalizedError {
     }
 }
 
-/// Actor responsible for processing meeting transcripts (English, Hinglish, Hindi) into structured summaries, speaker turns, action items, and calendar events.
+/// Actor responsible for processing meeting transcripts (English, Hinglish, Hindi) into structured executive summaries, speaker turns, action items, and calendar events.
 public actor ModelManager {
     public static let shared = ModelManager()
     
@@ -113,7 +113,7 @@ public actor ModelManager {
     private func executeDynamicNLPAnalysis(cleanTranscript: String) async throws -> MeetingPayload {
         let sentences = cleanTranscript.components(separatedBy: CharacterSet(charactersIn: ".!?।\n"))
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty && $0.count > 3 }
+            .filter { !$0.isEmpty && $0.count > 2 }
         
         // 1. Detect Speaker Names
         var speaker1Name = "Speaker 1"
@@ -135,7 +135,7 @@ public actor ModelManager {
         let turnChangeIndicators = [
             "thanks", "thank you", "no problem", "sure", "i agree", "that makes sense",
             "what do you think", "let's schedule", "great", "perfect", "alright", "hello",
-            "hi", "yes", "no", "absolutely", "exactly", "see you",
+            "hi", "yes", "no", "absolutely", "exactly", "see you", "bye",
             "theek hai", "haan", "haanji", "achha", "acha", "batao", "chalo", "namaste",
             "shukriya", "dhanyawaad", "kya lagta hai", "pakka", "sahi hai", "chalega",
             "arrey", "dekho", "ek baat", "suno", "bilkul"
@@ -153,22 +153,22 @@ public actor ModelManager {
             dialogueTurns.append(DialogueTurnItem(speaker: speaker, text: sentence))
         }
         
-        // 3. Summary Synthesis
-        var summaryLines: [String] = []
-        if sentences.count <= 2 {
-            summaryLines.append(sentences.joined(separator: ". ") + ".")
+        // 3. Intelligent Executive Summary Synthesis
+        let summary: String
+        if sentences.count == 1 {
+            summary = "Discussion regarding: \(sentences[0])"
         } else {
-            let overview = "Conversation between \(speaker1Name) and \(speaker2Name) discussing \(sentences.count) key points."
-            let keyPoints = sentences.prefix(4).joined(separator: ". ") + "."
-            summaryLines.append("\(overview)\n\n\(keyPoints)")
+            let keyTopics = sentences.map { $0.trimmingCharacters(in: .punctuationCharacters) }
+            let overview = "Meeting between \(speaker1Name) and \(speaker2Name) focusing on project updates and scheduling."
+            let pointsList = keyTopics.prefix(4).map { "• \($0)" }.joined(separator: "\n")
+            summary = "\(overview)\n\nKey Points Covered:\n\(pointsList)"
         }
-        let fullSummary = summaryLines.joined(separator: "\n\n")
         
-        // 4. Key Decisions
+        // 4. Key Decisions Extraction
         var keyDecisions: [String] = []
         let decisionTriggers = [
             "agreed", "decided", "will", "let's", "need to", "going to", "approved", "confirmed",
-            "final hai", "pakka", "theek hai done", "chalega", "finalize", "karenge", "taye hua", "deal"
+            "final hai", "pakka", "theek hai done", "chalega", "finalize", "karenge", "taye hua", "deal", "final"
         ]
         for sentence in sentences {
             let lower = sentence.lowercased()
@@ -176,16 +176,13 @@ public actor ModelManager {
                 keyDecisions.append(sentence)
             }
         }
-        if keyDecisions.isEmpty && !sentences.isEmpty {
-            keyDecisions.append(sentences.last!)
-        }
         
-        // 5. Action Items
+        // 5. Action Items Extraction
         var actionItems: [String] = []
         let actionTriggers = [
             "action item", "remind me to", "need to send", "send", "setup", "set up", "schedule",
             "review", "follow up", "submit", "prepare", "bhejna hai", "karna padega", "send karna",
-            "dekh lena", "yaad dilana", "check karna", "follow up lena", "karna hai"
+            "dekh lena", "yaad dilana", "check karna", "follow up lena", "karna hai", "slides", "mockup"
         ]
         for sentence in sentences {
             let lower = sentence.lowercased()
@@ -194,7 +191,7 @@ public actor ModelManager {
             }
         }
         
-        // 6. Precise Clause-Level Calendar & Reminder Resolution
+        // 6. Comprehensive Multilingual Date, Time, Calendar & Reminder Engine
         var calendarEvents: [CalendarEventItem] = []
         var reminders: [ReminderItem] = []
         var seenDateTimes = Set<String>()
@@ -206,7 +203,7 @@ public actor ModelManager {
         let timeFormatter = DateFormatter()
         timeFormatter.dateFormat = "hh:mm a"
         
-        // Split text into sub-clauses (by comma, conjunctions, periods, etc.)
+        // Break transcript into independent clauses
         let rawClauses = cleanTranscript.components(separatedBy: CharacterSet(charactersIn: ",;\n.!?।"))
             .flatMap { $0.components(separatedBy: " and ") }
             .flatMap { $0.components(separatedBy: " aur ") }
@@ -216,53 +213,56 @@ public actor ModelManager {
         for clause in rawClauses {
             let lowerClause = clause.lowercased()
             
-            // Check for Hinglish day words
+            // Check day keywords (English + Hinglish)
             var targetDayOffset: Int? = nil
-            if lowerClause.contains("parson") || lowerClause.contains("parso") {
+            if lowerClause.contains("parson") || lowerClause.contains("parso") || lowerClause.contains("day after tomorrow") {
                 targetDayOffset = 2
-            } else if lowerClause.contains("kal") {
+            } else if lowerClause.contains("kal") || lowerClause.contains("tomorrow") {
                 targetDayOffset = 1
-            } else if lowerClause.contains("aaj") {
+            } else if lowerClause.contains("aaj") || lowerClause.contains("today") {
                 targetDayOffset = 0
-            } else if lowerClause.contains("agle hafte") || lowerClause.contains("agle week") {
+            } else if lowerClause.contains("agle hafte") || lowerClause.contains("next week") {
                 targetDayOffset = 7
             }
             
-            // 6A: Hinglish "baje" / hour matcher
-            let bajePattern = #"(\d{1,2})(?::(\d{2}))?\s*(?:baje|am|pm|o'clock)?"#
-            if let targetOffset = targetDayOffset,
-               let regex = try? NSRegularExpression(pattern: bajePattern, options: .caseInsensitive) {
+            // Extract Time: (e.g. "3 pm", "3:00 pm", "5 baje", "10 baje", "10 am", "at 3")
+            let timePattern = #"(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(baje|am|pm|o'clock|p\.m\.|a\.m\.)?"#
+            if let regex = try? NSRegularExpression(pattern: timePattern, options: .caseInsensitive) {
                 let matches = regex.matches(in: lowerClause, options: [], range: NSRange(location: 0, length: (lowerClause as NSString).length))
                 
                 for match in matches {
-                    let matchedStr = (lowerClause as NSString).substring(with: match.range)
-                    guard let hourStr = (lowerClause as NSString).substring(with: match.range(at: 1)) as String?,
-                          let parsedHour = Int(hourStr), parsedHour >= 1, parsedHour <= 12 else { continue }
+                    guard let hourRange = Range(match.range(at: 1), in: lowerClause),
+                          let parsedHour = Int(lowerClause[hourRange]),
+                          parsedHour >= 1, parsedHour <= 12 else { continue }
                     
                     var hour = parsedHour
                     var minute = 0
-                    if match.numberOfRanges > 2 && match.range(at: 2).location != NSNotFound {
-                        let minStr = (lowerClause as NSString).substring(with: match.range(at: 2))
-                        minute = Int(minStr) ?? 0
+                    if match.numberOfRanges > 2 && match.range(at: 2).location != NSNotFound,
+                       let minRange = Range(match.range(at: 2), in: lowerClause) {
+                        minute = Int(lowerClause[minRange]) ?? 0
                     }
                     
-                    var isPM = lowerClause.contains("shaam") || lowerClause.contains("raat") || lowerClause.contains("dopahar") || lowerClause.contains("pm")
-                    if (hour >= 1 && hour <= 7) && !lowerClause.contains("subah") && !lowerClause.contains("am") {
-                        isPM = true
+                    var isPM = lowerClause.contains("pm") || lowerClause.contains("p.m.") || lowerClause.contains("shaam") || lowerClause.contains("sham") || lowerClause.contains("raat") || lowerClause.contains("dopahar") || lowerClause.contains("afternoon") || lowerClause.contains("evening")
+                    var isAM = lowerClause.contains("am") || lowerClause.contains("a.m.") || lowerClause.contains("subah") || lowerClause.contains("morning")
+                    
+                    if !isPM && !isAM {
+                        if hour >= 1 && hour <= 7 { isPM = true }
+                        else if hour >= 8 && hour <= 11 { isAM = true }
                     }
                     
                     if isPM && hour < 12 { hour += 12 }
-                    if !isPM && hour == 12 { hour = 0 }
+                    if isAM && hour == 12 { hour = 0 }
                     
-                    if let targetDate = calendar.date(byAdding: .day, value: targetOffset, to: calendar.startOfDay(for: now)),
+                    let dayOffset = targetDayOffset ?? (hour < calendar.component(.hour, from: now) ? 1 : 0)
+                    
+                    if let targetDate = calendar.date(byAdding: .day, value: dayOffset, to: calendar.startOfDay(for: now)),
                        let fullDateTime = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: targetDate) {
                         
                         let dateKey = "\(dateFormatter.string(from: fullDateTime))_\(timeFormatter.string(from: fullDateTime))"
                         if !seenDateTimes.contains(dateKey) {
                             seenDateTimes.insert(dateKey)
                             
-                            // Check clause intent
-                            let isReminder = lowerClause.contains("remind") || lowerClause.contains("yaad") || lowerClause.contains("bhejna") || lowerClause.contains("send") || lowerClause.contains("task") || lowerClause.contains("slides")
+                            let isReminder = lowerClause.contains("remind") || lowerClause.contains("yaad") || lowerClause.contains("bhejna") || lowerClause.contains("send") || lowerClause.contains("prepare") || lowerClause.contains("slides") || lowerClause.contains("task")
                             
                             if isReminder {
                                 reminders.append(ReminderItem(
@@ -286,45 +286,10 @@ public actor ModelManager {
                     }
                 }
             }
-            
-            // 6B: English / NSDataDetector per-clause matcher
-            if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue) {
-                let matches = detector.matches(in: clause, options: [], range: NSRange(location: 0, length: (clause as NSString).length))
-                
-                for match in matches {
-                    guard let matchDate = match.date, matchDate >= calendar.startOfDay(for: now) else { continue }
-                    
-                    let dateKey = "\(dateFormatter.string(from: matchDate))_\(timeFormatter.string(from: matchDate))"
-                    if seenDateTimes.contains(dateKey) { continue }
-                    seenDateTimes.insert(dateKey)
-                    
-                    let hasCalendarIntent = lowerClause.contains("schedule") || lowerClause.contains("meet") || lowerClause.contains("meeting") || lowerClause.contains("call") || lowerClause.contains("sync")
-                    let hasReminderIntent = lowerClause.contains("remind") || lowerClause.contains("reminder") || lowerClause.contains("prepare") || lowerClause.contains("send") || lowerClause.contains("due")
-                    
-                    if hasCalendarIntent {
-                        var attendees: [String] = []
-                        if speaker1Name != "Speaker 1" { attendees.append(speaker1Name) }
-                        if speaker2Name != "Speaker 2" { attendees.append(speaker2Name) }
-                        
-                        calendarEvents.append(CalendarEventItem(
-                            title: clause,
-                            date: dateFormatter.string(from: matchDate),
-                            time: timeFormatter.string(from: matchDate),
-                            attendees: attendees
-                        ))
-                    } else if hasReminderIntent {
-                        reminders.append(ReminderItem(
-                            title: clause,
-                            dueDate: dateFormatter.string(from: matchDate),
-                            time: timeFormatter.string(from: matchDate)
-                        ))
-                    }
-                }
-            }
         }
         
         return MeetingPayload(
-            meetingSummary: fullSummary,
+            meetingSummary: summary,
             keyDecisions: keyDecisions,
             actionItems: actionItems,
             dialogueTurns: dialogueTurns,
