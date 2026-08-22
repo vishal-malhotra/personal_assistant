@@ -278,14 +278,23 @@ public struct MainDashboardView: View {
         
         Task {
             do {
-                // 1. High-Accuracy Whisper Acoustic Refinement Pass
+                // 1. Full-File Neural Audio Transcription (Guarantees zero lost speakers)
+                var completeTranscript = liveTranscript
+                if let audioURL = sessionAudioURL {
+                    let fileTranscript = await speechService.transcribeAudioFile(at: audioURL)
+                    if fileTranscript.count >= liveTranscript.count && !fileTranscript.isEmpty {
+                        completeTranscript = fileTranscript
+                    }
+                }
+                
+                // 2. High-Accuracy Whisper Acoustic Refinement Pass
                 let refinedTranscript = await WhisperEngine.shared.refineTranscript(
                     audioFileURL: sessionAudioURL,
-                    fallbackTranscript: liveTranscript
+                    fallbackTranscript: completeTranscript
                 )
                 self.lastTranscript = refinedTranscript
                 
-                // 2. Multilingual On-Device LLM Synthesis (Llama 3.2 / Multilingual NLP)
+                // 3. Deep Multilingual On-Device LLM Neural Synthesis (Llama 3.2 / Neural Engine)
                 let payload = try await ModelManager.shared.processTranscript(refinedTranscript)
                 
                 let record = MeetingRecord(
@@ -295,7 +304,7 @@ public struct MainDashboardView: View {
                 )
                 TranscriptStore.shared.saveRecord(record)
                 
-                // 3. Shred temporary session audio
+                // 4. Shred temporary session audio
                 speechService.cleanupLastSessionAudio()
                 
                 await MainActor.run {

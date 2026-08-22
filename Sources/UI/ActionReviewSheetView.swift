@@ -17,6 +17,28 @@ public struct ActionReviewSheetView: View {
     public var body: some View {
         NavigationStack {
             Form {
+                // Section 0: Complete Spoken Transcript
+                Section(header: Text("Full Meeting Transcript")) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(rawTranscript.isEmpty ? "No transcript captured." : rawTranscript)
+                            .font(.system(.subheadline, design: .monospaced))
+                            .foregroundColor(AssistantTheme.label)
+                            .lineSpacing(3)
+                            .padding(.vertical, 4)
+                        
+                        HStack {
+                            Spacer()
+                            Button(action: {
+                                UIPasteboard.general.string = rawTranscript
+                            }) {
+                                Label("Copy Transcript", systemImage: "doc.on.doc")
+                                    .font(.caption)
+                                    .foregroundColor(AssistantTheme.systemBlue)
+                            }
+                        }
+                    }
+                }
+                
                 // Section 1: Detailed Meeting Summary
                 Section(header: Text("Discussion Summary")) {
                     Text(payload.meetingSummary)

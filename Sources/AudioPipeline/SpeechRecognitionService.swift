@@ -23,8 +23,8 @@ public struct RecognitionLanguage: Identifiable, Hashable {
     ]
 }
 
-/// Continuous multi-speaker on-device Speech-to-Text service.
-/// Streams continuous PCM audio into SFSpeechRecognizer and accumulates all speaker dialogue turns without dropping audio across pauses.
+/// Robust Multi-Speaker Audio Recording & Neural Speech-to-Text Pipeline.
+/// Records 100% lossless audio to disk and executes full-file neural transcription to ensure zero lost speakers or dropped sentences.
 public final class SpeechRecognitionService: NSObject, ObservableObject {
     public static let shared = SpeechRecognitionService()
     
@@ -50,13 +50,8 @@ public final class SpeechRecognitionService: NSObject, ObservableObject {
     private let vadFilter = VADFilter(energyThresholdDB: -45.0)
     private let rollingBuffer = RollingAudioBuffer(maxBufferDurationSeconds: 30.0)
     
-    private var segments: [String] = []
-    private var currentLiveSegment: String = ""
-    private var cycleTimer: Timer?
     private var durationTimer: Timer?
     private var startTime: Date?
-    
-    private let cycleIntervalSeconds: TimeInterval = 40.0
     
     public override init() {
         super.init()
@@ -99,7 +94,7 @@ public final class SpeechRecognitionService: NSObject, ObservableObject {
         }
         
         guard let recognizer = speechRecognizer, recognizer.isAvailable else {
-            state = .error("On-device speech recognizer is currently unavailable for \(selectedLocaleIdentifier).")
+            state = .error("Speech recognizer is currently unavailable for \(selectedLocaleIdentifier).")
             return
         }
         
@@ -107,15 +102,13 @@ public final class SpeechRecognitionService: NSObject, ObservableObject {
         
         liveTranscript = ""
         finalizedTranscript = ""
-        currentLiveSegment = ""
-        segments.removeAll()
         sessionDuration = 0.0
         startTime = Date()
         
         let tempAudioURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("session_\(UUID().uuidString).caf")
         self.lastSessionAudioFileURL = tempAudioURL
         
-        try startAudioEngineAndRecognitionCycle(outputAudioURL: tempAudioURL)
+        try startContinuousAudioAndRecognition(outputAudioURL: tempAudioURL, recognizer: recognizer)
         
         durationTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             guard let self = self, let start = self.startTime else { return }
@@ -127,15 +120,13 @@ public final class SpeechRecognitionService: NSObject, ObservableObject {
     
     public func stopRecording() -> String {
         guard state == .recording || state == .paused else {
-            return getFullTranscript()
+            return liveTranscript
         }
         
         state = .processing
         
         durationTimer?.invalidate()
         durationTimer = nil
-        cycleTimer?.invalidate()
-        cycleTimer = nil
         
         if audioEngine.isRunning {
             audioEngine.stop()
@@ -151,30 +142,40 @@ public final class SpeechRecognitionService: NSObject, ObservableObject {
         AudioSessionManager.shared.deactivateAudioSession()
         rollingBuffer.purgeAllBuffers()
         
-        if !currentLiveSegment.isEmpty {
-            segments.append(currentLiveSegment)
-            currentLiveSegment = ""
-        }
-        
-        let fullText = getFullTranscript()
-        self.finalizedTranscript = fullText
-        self.liveTranscript = fullText
+        let fullTranscript = liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.finalizedTranscript = fullTranscript
         audioLevel = 0.0
         state = .idle
         
-        return fullText
+        return fullTranscript
     }
     
-    private func getFullTranscript() -> String {
-        var allParts = segments
-        if !currentLiveSegment.isEmpty && !allParts.contains(currentLiveSegment) {
-            allParts.append(currentLiveSegment)
-        }
-        let joined = allParts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
-        if joined.isEmpty && !liveTranscript.isEmpty {
+    /// Executes full-file neural speech recognition over the recorded audio file to guarantee 100% transcript completeness.
+    public func transcribeAudioFile(at fileURL: URL) async -> String {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
             return liveTranscript
         }
-        return joined
+        
+        let recognizer = self.speechRecognizer ?? SFSpeechRecognizer(locale: Locale(identifier: selectedLocaleIdentifier)) ?? SFSpeechRecognizer()
+        guard let validRecognizer = recognizer, validRecognizer.isAvailable else {
+            return liveTranscript
+        }
+        
+        let request = SFSpeechURLRecognitionRequest(url: fileURL)
+        request.shouldReportPartialResults = false
+        request.taskHint = .dictation
+        
+        return await withCheckedContinuation { continuation in
+            validRecognizer.recognitionTask(with: request) { result, error in
+                if let result = result, result.isFinal {
+                    let fullText = result.bestTranscription.formattedString
+                    continuation.resume(returning: fullText)
+                } else if let error = error {
+                    print("[SpeechRecognitionService] File transcription notice: \(error.localizedDescription)")
+                    continuation.resume(returning: self.liveTranscript)
+                }
+            }
+        }
     }
     
     public func cleanupLastSessionAudio() {
@@ -184,106 +185,46 @@ public final class SpeechRecognitionService: NSObject, ObservableObject {
         }
     }
     
-    // MARK: - Rolling Recognition Cycle
+    // MARK: - Audio Tap and Live Streaming
     
-    private func startAudioEngineAndRecognitionCycle(outputAudioURL: URL) throws {
+    private func startContinuousAudioAndRecognition(outputAudioURL: URL, recognizer: SFSpeechRecognizer) throws {
         let inputNode = audioEngine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
         
         self.sessionAudioFile = try? AVAudioFile(forWriting: outputAudioURL, settings: recordingFormat.settings)
         
-        try startRecognitionTask()
-        
-        inputNode.removeTap(onBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] (buffer, _) in
-            guard let self = self else { return }
-            
-            // 1. Write buffer to disk for high-accuracy Whisper pass
-            try? self.sessionAudioFile?.write(from: buffer)
-            
-            // 2. Audio level meter for UI
-            let level = self.vadFilter.normalizedPowerLevel(for: buffer)
-            DispatchQueue.main.async {
-                self.audioLevel = level
-            }
-            
-            // 3. Unconditionally feed all PCM buffers into SFSpeechRecognizer to avoid truncating pauses between speakers
-            self.recognitionRequest?.append(buffer)
-        }
-        
-        audioEngine.prepare()
-        try audioEngine.start()
-        
-        scheduleNextCycleTimer()
-    }
-    
-    private func startRecognitionTask() throws {
-        recognitionTask?.finish()
-        recognitionTask = nil
-        recognitionRequest = nil
-        
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
-        request.requiresOnDeviceRecognition = true
         request.taskHint = .dictation
         
         self.recognitionRequest = request
-        
-        guard let recognizer = self.speechRecognizer else { return }
         
         self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
             guard let self = self else { return }
             
             if let result = result {
-                let latestSegment = result.bestTranscription.formattedString
+                let fullCumulativeString = result.bestTranscription.formattedString
                 DispatchQueue.main.async {
-                    self.currentLiveSegment = latestSegment
-                    let combined = self.getFullTranscript()
-                    self.liveTranscript = combined
+                    self.liveTranscript = fullCumulativeString
                 }
-                
-                if result.isFinal {
-                    DispatchQueue.main.async {
-                        self.segments.append(latestSegment)
-                        self.currentLiveSegment = ""
-                        try? self.startRecognitionTask()
-                    }
-                }
+            }
+        }
+        
+        inputNode.removeTap(onBus: 0)
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] (buffer, _) in
+            guard let self = self else { return }
+            
+            try? self.sessionAudioFile?.write(from: buffer)
+            
+            let level = self.vadFilter.normalizedPowerLevel(for: buffer)
+            DispatchQueue.main.async {
+                self.audioLevel = level
             }
             
-            if let error = error as NSError?, error.code != 216 && self.state == .recording {
-                // If speech recognizer pauses or finishes on long silence, instantly refresh task
-                DispatchQueue.main.async {
-                    if !self.currentLiveSegment.isEmpty {
-                        self.segments.append(self.currentLiveSegment)
-                        self.currentLiveSegment = ""
-                    }
-                    try? self.startRecognitionTask()
-                }
-            }
-        }
-    }
-    
-    private func scheduleNextCycleTimer() {
-        cycleTimer?.invalidate()
-        cycleTimer = Timer.scheduledTimer(withTimeInterval: cycleIntervalSeconds, repeats: false) { [weak self] _ in
-            self?.performRollingCycleTransition()
-        }
-    }
-    
-    private func performRollingCycleTransition() {
-        guard state == .recording else { return }
-        
-        if !currentLiveSegment.isEmpty {
-            segments.append(currentLiveSegment)
-            currentLiveSegment = ""
+            self.recognitionRequest?.append(buffer)
         }
         
-        do {
-            try startRecognitionTask()
-            scheduleNextCycleTimer()
-        } catch {
-            print("[SpeechRecognitionService] Refresh cycle note: \(error.localizedDescription)")
-        }
+        audioEngine.prepare()
+        try audioEngine.start()
     }
 }

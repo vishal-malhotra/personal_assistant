@@ -158,7 +158,7 @@ public actor ModelManager {
         if sentences.count <= 1 {
             summary = sentences.first ?? cleanTranscript
         } else {
-            let overview = "Meeting between \(speaker1Name) and \(speaker2Name) covering \(sentences.count) discussion points across the entire recording."
+            let overview = "Meeting between \(speaker1Name) and \(speaker2Name) discussing \(sentences.count) key topics."
             let pointsList = sentences.map { "• \($0)" }.joined(separator: "\n")
             summary = "\(overview)\n\nDiscussion Details:\n\(pointsList)"
         }
@@ -190,7 +190,7 @@ public actor ModelManager {
             }
         }
         
-        // 6. Comprehensive Multilingual Calendar & Reminder Resolution (Analyzes 100% of clauses)
+        // 6. Comprehensive Multilingual Calendar & Reminder Resolution
         var calendarEvents: [CalendarEventItem] = []
         var reminders: [ReminderItem] = []
         var seenDateTimes = Set<String>()
@@ -202,7 +202,6 @@ public actor ModelManager {
         let timeFormatter = DateFormatter()
         timeFormatter.dateFormat = "hh:mm a"
         
-        // Split full transcript into complete clauses
         let rawClauses = cleanTranscript.components(separatedBy: CharacterSet(charactersIn: ",;\n.!?।"))
             .flatMap { $0.components(separatedBy: " and ") }
             .flatMap { $0.components(separatedBy: " aur ") }
@@ -214,12 +213,22 @@ public actor ModelManager {
             "somwar": 2, "mangalwar": 3, "budhwar": 4, "guruwar": 5, "shukrawar": 6, "shaniwar": 7, "raviwar": 1
         ]
         
+        let calendarKeywords = [
+            "meet", "meeting", "call", "sync", "schedule", "connect", "discuss", "discussion",
+            "session", "appointment", "catch up", "talk", "rakh", "milte", "milenge", "baat karenge", "baithak"
+        ]
+        
+        let reminderKeywords = [
+            "remind", "reminder", "yaad", "bhejna", "send", "prepare", "slides", "mockup",
+            "task", "action item", "submit", "finish", "complete", "share", "ping", "email",
+            "update", "check karna", "dekh lena", "karna hai"
+        ]
+        
         for clause in rawClauses {
             let lowerClause = clause.lowercased()
             
-            // Check intent
-            let isCalendar = lowerClause.contains("meet") || lowerClause.contains("meeting") || lowerClause.contains("call") || lowerClause.contains("sync") || lowerClause.contains("schedule") || lowerClause.contains("rakh") || lowerClause.contains("milte")
-            let isReminder = lowerClause.contains("remind") || lowerClause.contains("reminder") || lowerClause.contains("yaad") || lowerClause.contains("bhejna") || lowerClause.contains("send") || lowerClause.contains("prepare") || lowerClause.contains("slides") || lowerClause.contains("mockup") || lowerClause.contains("task") || lowerClause.contains("action item") || lowerClause.contains("submit")
+            let isCalendar = calendarKeywords.contains(where: { lowerClause.contains($0) })
+            let isReminder = reminderKeywords.contains(where: { lowerClause.contains($0) })
             
             if !isCalendar && !isReminder {
                 continue
