@@ -54,7 +54,7 @@ public final class ModelDownloadManager: NSObject, ObservableObject, URLSessionD
         let config = URLSessionConfiguration.background(withIdentifier: Self.backgroundSessionIdentifier)
         config.isDiscretionary = false
         config.sessionSendsLaunchEvents = true
-        config.shouldSetCookies = false
+        config.httpShouldSetCookies = false
         return URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }()
     
