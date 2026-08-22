@@ -82,7 +82,8 @@ public actor ModelManager {
         #endif
         
         // 1. Check if a local GGUF model is available on device
-        let targetModelURL = modelURL ?? (await MainActor.run { ModelDownloadManager.shared.localModelURL })
+        let defaultURL = await MainActor.run { ModelDownloadManager.shared.localModelURL }
+        let targetModelURL = modelURL ?? defaultURL
         
         if let targetModelURL = targetModelURL, FileManager.default.fileExists(atPath: targetModelURL.path) {
             // Safety Check: Evaluate memory headroom before loading GGUF into RAM
@@ -168,7 +169,6 @@ public actor ModelManager {
             for match in matches {
                 if let matchDate = match.date {
                     let matchedString = (transcript as NSString).substring(with: match.range)
-                    let matchedLower = matchedString.lowercased()
                     
                     // Determine if context around the date suggests a meeting or a reminder
                     let contextRange = (transcript as NSString).range(of: matchedString)
