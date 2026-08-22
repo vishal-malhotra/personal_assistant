@@ -10,7 +10,8 @@ public enum InferenceError: LocalizedError {
     case cancelled
     
     public var errorDescription: String? {
-        switch .insufficientMemory(let available, let required):
+        switch self {
+        case .insufficientMemory(let available, let required):
             return "Insufficient memory available (\(available)MB / \(required)MB required) to load local AI model safely."
         case .modelNotFound(let path):
             return "Quantized model weights not found at path: \(path)"
@@ -54,14 +55,18 @@ public actor ModelManager {
         #if canImport(UIKit)
         // Request background execution assertion to prevent process freezing
         var backgroundTaskId: UIBackgroundTaskIdentifier = .invalid
-        backgroundTaskId = UIApplication.shared.beginBackgroundTask(withName: "OnDeviceLLMInference") {
-            // Expiration handler
-            UIApplication.shared.endBackgroundTask(backgroundTaskId)
-            backgroundTaskId = .invalid
+        await MainActor.run {
+            backgroundTaskId = UIApplication.shared.beginBackgroundTask(withName: "OnDeviceLLMInference") {
+                UIApplication.shared.endBackgroundTask(backgroundTaskId)
+                backgroundTaskId = .invalid
+            }
         }
         defer {
             if backgroundTaskId != .invalid {
-                UIApplication.shared.endBackgroundTask(backgroundTaskId)
+                let idToEnd = backgroundTaskId
+                Task { @MainActor in
+                    UIApplication.shared.endBackgroundTask(idToEnd)
+                }
             }
         }
         #endif

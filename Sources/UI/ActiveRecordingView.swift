@@ -60,7 +60,7 @@ public struct ActiveRecordingView: View {
                                 .id("LiveBottom")
                         }
                         .frame(height: 120)
-                        .onChange(of: speechService.liveTranscript) { _ in
+                        .onChange(of: speechService.liveTranscript) {
                             withAnimation {
                                 proxy.scrollTo("LiveBottom", anchor: .bottom)
                             }
