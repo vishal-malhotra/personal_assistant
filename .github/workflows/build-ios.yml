@@ -1,4 +1,4 @@
-name: Build iOS IPA
+name: Build & Test iOS IPA
 
 on:
   push:
@@ -8,8 +8,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
-    name: Build iOS IPA Package
+  test-and-build:
+    name: Run Automated Tests & Build IPA
     runs-on: macos-15
 
     steps:
@@ -27,6 +27,17 @@ jobs:
       - name: Generate Xcode Project
         run: |
           xcodegen generate
+
+      - name: Run Automated Test Suite (Unit & Logic Validation)
+        run: |
+          xcodebuild test \
+            -project PersonalAssistant.xcodeproj \
+            -scheme PersonalAssistantTests \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            BUILD_DIR=./test_build
 
       - name: Build Application (Unsigned Release for Sideloading)
         run: |

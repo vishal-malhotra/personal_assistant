@@ -4,9 +4,11 @@ public struct MainDashboardView: View {
     @ObservedObject private var speechService = SpeechRecognitionService.shared
     @ObservedObject private var transcriptStore = TranscriptStore.shared
     @ObservedObject private var modelDownloader = ModelDownloadManager.shared
+    @ObservedObject private var whisperEngine = WhisperEngine.shared
     
     @State private var isRecordingViewPresented: Bool = false
     @State private var isProcessing: Bool = false
+    @State private var processingStatusText: String = "Analyzing discussion..."
     @State private var activePayload: MeetingPayload?
     @State private var lastTranscript: String = ""
     @State private var showReviewSheet: Bool = false
@@ -30,81 +32,92 @@ public struct MainDashboardView: View {
         NavigationStack {
             List {
                 // Section 1: AI Model Engine Status & Downloader
-                Section(header: Text("On-Device AI Engine")) {
-                    if modelDownloader.isDownloaded {
-                        HStack {
-                            Image(systemName: "cpu.fill")
-                                .foregroundColor(AssistantTheme.systemGreen)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Offline Neural LLM Active")
-                                    .font(.subheadline)
-                                    .fontWeight(.medium)
-                                Text("Llama 3.2 1B (Quantized Q4_K_M)")
-                                    .font(.caption2)
-                                    .foregroundColor(AssistantTheme.secondaryLabel)
-                            }
-                            Spacer()
+                Section(header: Text("On-Device AI Engines")) {
+                    // Llama 3.2 Status
+                    HStack {
+                        Image(systemName: "cpu.fill")
+                            .foregroundColor(modelDownloader.isDownloaded ? AssistantTheme.systemGreen : AssistantTheme.systemBlue)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(modelDownloader.isDownloaded ? "Llama 3.2 1B Active" : "Dynamic NLP Active (Llama Ready)")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                            Text(modelDownloader.isDownloaded ? "Neural JSON & Reasoning (750 MB)" : "Tap to download 750 MB Llama model")
+                                .font(.caption2)
+                                .foregroundColor(AssistantTheme.secondaryLabel)
+                        }
+                        Spacer()
+                        if modelDownloader.isDownloaded {
                             Image(systemName: "checkmark.circle.fill")
                                 .foregroundColor(AssistantTheme.systemGreen)
+                        } else if !modelDownloader.isDownloading {
+                            Button("Download") {
+                                modelDownloader.startDownload(type: .llama)
+                            }
+                            .font(.caption2)
+                            .buttonStyle(.borderedProminent)
                         }
-                    } else if modelDownloader.isDownloading {
-                        VStack(alignment: .leading, spacing: 8) {
+                    }
+                    
+                    // Whisper Base Status
+                    HStack {
+                        Image(systemName: "waveform.badge.magnifyingglass")
+                            .foregroundColor(modelDownloader.isWhisperDownloaded ? AssistantTheme.systemGreen : AssistantTheme.systemBlue)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(modelDownloader.isWhisperDownloaded ? "Whisper Base STT Active" : "Apple Neural STT Active")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                            Text(modelDownloader.isWhisperDownloaded ? "WhisperFlow Hinglish Accuracy (142 MB)" : "Tap to download 142 MB Whisper model")
+                                .font(.caption2)
+                                .foregroundColor(AssistantTheme.secondaryLabel)
+                        }
+                        Spacer()
+                        if modelDownloader.isWhisperDownloaded {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(AssistantTheme.systemGreen)
+                        } else if !modelDownloader.isDownloading {
+                            Button("Download") {
+                                modelDownloader.startDownload(type: .whisper)
+                            }
+                            .font(.caption2)
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                    
+                    // Downloading Progress Bar
+                    if modelDownloader.isDownloading {
+                        VStack(alignment: .leading, spacing: 6) {
                             HStack {
-                                Text("Downloading Neural Model...")
-                                    .font(.subheadline)
+                                Text("Downloading...")
+                                    .font(.caption)
                                     .fontWeight(.medium)
                                 Spacer()
                                 Button("Cancel") {
                                     modelDownloader.cancelDownload()
                                 }
-                                .font(.caption)
+                                .font(.caption2)
                                 .foregroundColor(AssistantTheme.systemRed)
                             }
-                            
                             ProgressView(value: modelDownloader.downloadProgress, total: 1.0)
                                 .tint(AssistantTheme.systemBlue)
-                            
                             Text(modelDownloader.progressStatusText)
                                 .font(.caption2)
                                 .foregroundColor(AssistantTheme.secondaryLabel)
                         }
-                        .padding(.vertical, 4)
-                    } else {
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack {
-                                Image(systemName: "bolt.shield")
-                                    .foregroundColor(AssistantTheme.systemBlue)
-                                Text("Dynamic Natural Language Active")
-                                    .font(.subheadline)
-                                    .fontWeight(.medium)
-                            }
-                            
-                            Text("Fast on-device parsing active. You can also download the full neural LLM for extended reasoning.")
-                                .font(.caption2)
-                                .foregroundColor(AssistantTheme.secondaryLabel)
-                            
-                            Button(action: {
-                                modelDownloader.startDownload()
-                            }) {
-                                HStack {
-                                    Image(systemName: "arrow.down.circle.fill")
-                                    Text("Download Llama 3.2 Model (750 MB)")
-                                }
-                                .font(.caption)
-                                .fontWeight(.semibold)
-                                .padding(.vertical, 6)
-                                .padding(.horizontal, 12)
-                                .background(AssistantTheme.systemBlue.opacity(0.15))
-                                .foregroundColor(AssistantTheme.systemBlue)
-                                .clipShape(Capsule())
-                            }
-                            .padding(.top, 4)
-                        }
-                        .padding(.vertical, 4)
+                        .padding(.vertical, 2)
                     }
                 }
                 
-                // Section 2: Privacy Telemetry Note
+                // Section 2: Recognition Language / Speech Mode (Hinglish, Hindi, English)
+                Section(header: Text("Speech Recognition Language")) {
+                    Picker("Language Mode", selection: $speechService.selectedLocaleIdentifier) {
+                        ForEach(RecognitionLanguage.supported) { lang in
+                            Text("\(lang.flag) \(lang.displayName)").tag(lang.id)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                }
+                
+                // Section 3: Privacy Telemetry Note
                 Section {
                     HStack(spacing: 8) {
                         Image(systemName: "lock.shield")
@@ -115,7 +128,7 @@ public struct MainDashboardView: View {
                     }
                 }
                 
-                // Section 3: Meetings List
+                // Section 4: Meetings List
                 if filteredRecords.isEmpty {
                     Section {
                         VStack(spacing: 12) {
@@ -259,20 +272,31 @@ public struct MainDashboardView: View {
         isRecordingViewPresented = false
         isProcessing = true
         
-        let transcript = speechService.stopRecording()
+        let liveTranscript = speechService.stopRecording()
         let duration = speechService.sessionDuration
-        lastTranscript = transcript
+        let sessionAudioURL = speechService.lastSessionAudioFileURL
         
         Task {
             do {
-                let payload = try await ModelManager.shared.processTranscript(transcript)
+                // 1. High-Accuracy Whisper Acoustic Refinement Pass
+                let refinedTranscript = await WhisperEngine.shared.refineTranscript(
+                    audioFileURL: sessionAudioURL,
+                    fallbackTranscript: liveTranscript
+                )
+                self.lastTranscript = refinedTranscript
+                
+                // 2. Multilingual On-Device LLM Synthesis (Llama 3.2 / Multilingual NLP)
+                let payload = try await ModelManager.shared.processTranscript(refinedTranscript)
                 
                 let record = MeetingRecord(
                     durationSeconds: duration,
-                    rawTranscript: transcript,
+                    rawTranscript: refinedTranscript,
                     payload: payload
                 )
                 TranscriptStore.shared.saveRecord(record)
+                
+                // 3. Shred temporary session audio
+                speechService.cleanupLastSessionAudio()
                 
                 await MainActor.run {
                     self.activePayload = payload

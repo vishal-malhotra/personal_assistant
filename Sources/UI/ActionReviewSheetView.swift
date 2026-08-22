@@ -17,19 +17,59 @@ public struct ActionReviewSheetView: View {
     public var body: some View {
         NavigationStack {
             Form {
-                // Section 1: Meeting Summary
-                Section(header: Text("Summary")) {
+                // Section 1: Detailed Meeting Summary
+                Section(header: Text("Discussion Summary")) {
                     Text(payload.meetingSummary)
                         .font(.body)
                         .foregroundColor(AssistantTheme.label)
+                        .lineSpacing(4)
                 }
                 
-                // Section 2: Action Items
+                // Section 2: Key Decisions
+                if !payload.keyDecisions.isEmpty {
+                    Section(header: Text("Key Decisions")) {
+                        ForEach(payload.keyDecisions, id: \.self) { decision in
+                            HStack(alignment: .top, spacing: 10) {
+                                Image(systemName: "checkmark.seal.fill")
+                                    .foregroundColor(AssistantTheme.systemGreen)
+                                    .padding(.top, 2)
+                                Text(decision)
+                                    .font(.subheadline)
+                                    .fontWeight(.medium)
+                            }
+                        }
+                    }
+                }
+                
+                // Section 3: Speaker 1 & Speaker 2 Dialogue Breakdown
+                if !payload.dialogueTurns.isEmpty {
+                    Section(header: Text("Speaker Breakdown")) {
+                        ForEach(payload.dialogueTurns) { turn in
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "person.crop.circle.fill")
+                                        .font(.caption)
+                                        .foregroundColor(turn.speaker.contains("1") || turn.speaker.lowercased().contains("vishal") ? AssistantTheme.systemBlue : AssistantTheme.systemOrange)
+                                    Text(turn.speaker)
+                                        .font(.caption)
+                                        .fontWeight(.bold)
+                                        .foregroundColor(turn.speaker.contains("1") || turn.speaker.lowercased().contains("vishal") ? AssistantTheme.systemBlue : AssistantTheme.systemOrange)
+                                }
+                                Text(turn.text)
+                                    .font(.subheadline)
+                                    .foregroundColor(AssistantTheme.label)
+                            }
+                            .padding(.vertical, 3)
+                        }
+                    }
+                }
+                
+                // Section 4: Key Action Items
                 if !payload.actionItems.isEmpty {
-                    Section(header: Text("Key Action Items")) {
+                    Section(header: Text("Action Items")) {
                         ForEach(payload.actionItems, id: \.self) { item in
                             HStack(alignment: .top, spacing: 10) {
-                                Image(systemName: "checkmark.circle")
+                                Image(systemName: "checklist")
                                     .foregroundColor(AssistantTheme.systemBlue)
                                     .padding(.top, 2)
                                 Text(item)
@@ -39,9 +79,9 @@ public struct ActionReviewSheetView: View {
                     }
                 }
                 
-                // Section 3: Calendar Events (EventKit)
+                // Section 5: Calendar Events (EventKit)
                 if !confirmationManager.pendingEvents.isEmpty {
-                    Section(header: Text("Calendar Events")) {
+                    Section(header: Text("Calendar Events (\(confirmationManager.pendingEvents.count))")) {
                         ForEach($confirmationManager.pendingEvents) { $event in
                             Toggle(isOn: $event.isSelected) {
                                 VStack(alignment: .leading, spacing: 4) {
@@ -59,7 +99,7 @@ public struct ActionReviewSheetView: View {
                                     }
                                     
                                     if event.isSaved {
-                                        Text("✓ Added to Calendar")
+                                        Text("✓ Added to Apple Calendar")
                                             .font(.caption)
                                             .foregroundColor(AssistantTheme.systemGreen)
                                     }
@@ -69,9 +109,9 @@ public struct ActionReviewSheetView: View {
                     }
                 }
                 
-                // Section 4: Reminders (EventKit)
+                // Section 6: Reminders (EventKit)
                 if !confirmationManager.pendingReminders.isEmpty {
-                    Section(header: Text("Reminders")) {
+                    Section(header: Text("Reminders (\(confirmationManager.pendingReminders.count))")) {
                         ForEach($confirmationManager.pendingReminders) { $reminder in
                             Toggle(isOn: $reminder.isSelected) {
                                 VStack(alignment: .leading, spacing: 4) {
@@ -83,7 +123,7 @@ public struct ActionReviewSheetView: View {
                                         .foregroundColor(AssistantTheme.secondaryLabel)
                                     
                                     if reminder.isSaved {
-                                        Text("✓ Added to Reminders")
+                                        Text("✓ Added to Apple Reminders")
                                             .font(.caption)
                                             .foregroundColor(AssistantTheme.systemGreen)
                                     }
@@ -93,7 +133,7 @@ public struct ActionReviewSheetView: View {
                     }
                 }
             }
-            .navigationTitle("Review & Save")
+            .navigationTitle("Meeting Analysis")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -119,7 +159,7 @@ public struct ActionReviewSheetView: View {
                                 .fontWeight(.semibold)
                         }
                     }
-                    .disabled(confirmationManager.isExecuting)
+                    .disabled(confirmationManager.isExecuting || (confirmationManager.pendingEvents.isEmpty && confirmationManager.pendingReminders.isEmpty))
                 }
             }
             .onAppear {

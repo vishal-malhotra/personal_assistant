@@ -38,3 +38,12 @@ targets:
         NSSpeechRecognitionUsageDescription: "We use on-device speech recognition to convert your speech to text completely offline."
         NSCalendarsFullAccessUsageDescription: "We use your calendar to automatically schedule meetings extracted from your notes with your approval."
         NSRemindersFullAccessUsageDescription: "We use Reminders to save action items extracted from your notes with your approval."
+
+  PersonalAssistantTests:
+    type: bundle.unit-testing
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - Tests
+    dependencies:
+      - target: PersonalAssistant
