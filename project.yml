@@ -40,7 +40,7 @@ targets:
         NSRemindersFullAccessUsageDescription: "We use Reminders to save action items extracted from your notes with your approval."
 
   PersonalAssistantTests:
-    type: bundle.unit-testing
+    type: bundle.unit-test
     platform: iOS
     deploymentTarget: "17.0"
     sources:
