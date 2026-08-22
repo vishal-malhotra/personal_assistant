@@ -23,8 +23,8 @@ public struct RecognitionLanguage: Identifiable, Hashable {
     ]
 }
 
-/// Robust on-device Speech-to-Text service supporting Hinglish, Hindi, and English with audio caching for Whisper refinement.
-/// Preserves the entire accumulated conversation history without dropping early speech chunks.
+/// Continuous multi-speaker on-device Speech-to-Text service.
+/// Streams continuous PCM audio into SFSpeechRecognizer and accumulates all speaker dialogue turns without dropping audio across pauses.
 public final class SpeechRecognitionService: NSObject, ObservableObject {
     public static let shared = SpeechRecognitionService()
     
@@ -47,16 +47,16 @@ public final class SpeechRecognitionService: NSObject, ObservableObject {
     private var recognitionTask: SFSpeechRecognitionTask?
     private var sessionAudioFile: AVAudioFile?
     
-    private let vadFilter = VADFilter(energyThresholdDB: -42.0)
+    private let vadFilter = VADFilter(energyThresholdDB: -45.0)
     private let rollingBuffer = RollingAudioBuffer(maxBufferDurationSeconds: 30.0)
     
-    private var accumulatedSegments: [String] = []
-    private var currentSegmentText: String = ""
+    private var segments: [String] = []
+    private var currentLiveSegment: String = ""
     private var cycleTimer: Timer?
     private var durationTimer: Timer?
     private var startTime: Date?
     
-    private let cycleIntervalSeconds: TimeInterval = 45.0
+    private let cycleIntervalSeconds: TimeInterval = 40.0
     
     public override init() {
         super.init()
@@ -107,8 +107,8 @@ public final class SpeechRecognitionService: NSObject, ObservableObject {
         
         liveTranscript = ""
         finalizedTranscript = ""
-        currentSegmentText = ""
-        accumulatedSegments.removeAll()
+        currentLiveSegment = ""
+        segments.removeAll()
         sessionDuration = 0.0
         startTime = Date()
         
@@ -127,7 +127,7 @@ public final class SpeechRecognitionService: NSObject, ObservableObject {
     
     public func stopRecording() -> String {
         guard state == .recording || state == .paused else {
-            return fullCombinedTranscript()
+            return getFullTranscript()
         }
         
         state = .processing
@@ -144,37 +144,37 @@ public final class SpeechRecognitionService: NSObject, ObservableObject {
         
         sessionAudioFile = nil
         recognitionRequest?.endAudio()
-        recognitionTask?.cancel()
+        recognitionTask?.finish()
         recognitionTask = nil
         recognitionRequest = nil
         
         AudioSessionManager.shared.deactivateAudioSession()
         rollingBuffer.purgeAllBuffers()
         
-        if !currentSegmentText.isEmpty {
-            accumulatedSegments.append(currentSegmentText)
-            currentSegmentText = ""
+        if !currentLiveSegment.isEmpty {
+            segments.append(currentLiveSegment)
+            currentLiveSegment = ""
         }
         
-        let completed = fullCombinedTranscript()
-        self.finalizedTranscript = completed
-        self.liveTranscript = completed
+        let fullText = getFullTranscript()
+        self.finalizedTranscript = fullText
+        self.liveTranscript = fullText
         audioLevel = 0.0
         state = .idle
         
-        return completed
+        return fullText
     }
     
-    private func fullCombinedTranscript() -> String {
-        var allParts = accumulatedSegments
-        if !currentSegmentText.isEmpty && !allParts.contains(currentSegmentText) {
-            allParts.append(currentSegmentText)
+    private func getFullTranscript() -> String {
+        var allParts = segments
+        if !currentLiveSegment.isEmpty && !allParts.contains(currentLiveSegment) {
+            allParts.append(currentLiveSegment)
         }
-        let merged = allParts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
-        if merged.isEmpty && !liveTranscript.isEmpty {
+        let joined = allParts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        if joined.isEmpty && !liveTranscript.isEmpty {
             return liveTranscript
         }
-        return merged
+        return joined
     }
     
     public func cleanupLastSessionAudio() {
@@ -198,16 +198,17 @@ public final class SpeechRecognitionService: NSObject, ObservableObject {
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] (buffer, _) in
             guard let self = self else { return }
             
+            // 1. Write buffer to disk for high-accuracy Whisper pass
             try? self.sessionAudioFile?.write(from: buffer)
             
+            // 2. Audio level meter for UI
             let level = self.vadFilter.normalizedPowerLevel(for: buffer)
             DispatchQueue.main.async {
                 self.audioLevel = level
             }
             
-            if self.vadFilter.isSpeechDetected(in: buffer) {
-                self.recognitionRequest?.append(buffer)
-            }
+            // 3. Unconditionally feed all PCM buffers into SFSpeechRecognizer to avoid truncating pauses between speakers
+            self.recognitionRequest?.append(buffer)
         }
         
         audioEngine.prepare()
@@ -217,7 +218,7 @@ public final class SpeechRecognitionService: NSObject, ObservableObject {
     }
     
     private func startRecognitionTask() throws {
-        recognitionTask?.cancel()
+        recognitionTask?.finish()
         recognitionTask = nil
         recognitionRequest = nil
         
@@ -236,14 +237,29 @@ public final class SpeechRecognitionService: NSObject, ObservableObject {
             if let result = result {
                 let latestSegment = result.bestTranscription.formattedString
                 DispatchQueue.main.async {
-                    self.currentSegmentText = latestSegment
-                    let combined = self.fullCombinedTranscript()
+                    self.currentLiveSegment = latestSegment
+                    let combined = self.getFullTranscript()
                     self.liveTranscript = combined
+                }
+                
+                if result.isFinal {
+                    DispatchQueue.main.async {
+                        self.segments.append(latestSegment)
+                        self.currentLiveSegment = ""
+                        try? self.startRecognitionTask()
+                    }
                 }
             }
             
-            if let error = error as NSError?, error.code != 216 {
-                print("[SpeechRecognitionService] Task note: \(error.localizedDescription)")
+            if let error = error as NSError?, error.code != 216 && self.state == .recording {
+                // If speech recognizer pauses or finishes on long silence, instantly refresh task
+                DispatchQueue.main.async {
+                    if !self.currentLiveSegment.isEmpty {
+                        self.segments.append(self.currentLiveSegment)
+                        self.currentLiveSegment = ""
+                    }
+                    try? self.startRecognitionTask()
+                }
             }
         }
     }
@@ -258,16 +274,16 @@ public final class SpeechRecognitionService: NSObject, ObservableObject {
     private func performRollingCycleTransition() {
         guard state == .recording else { return }
         
-        if !currentSegmentText.isEmpty {
-            accumulatedSegments.append(currentSegmentText)
-            currentSegmentText = ""
+        if !currentLiveSegment.isEmpty {
+            segments.append(currentLiveSegment)
+            currentLiveSegment = ""
         }
         
         do {
             try startRecognitionTask()
             scheduleNextCycleTimer()
         } catch {
-            print("[SpeechRecognitionService] Error refreshing cycle: \(error.localizedDescription)")
+            print("[SpeechRecognitionService] Refresh cycle note: \(error.localizedDescription)")
         }
     }
 }
